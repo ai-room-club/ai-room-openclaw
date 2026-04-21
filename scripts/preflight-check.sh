@@ -60,6 +60,12 @@ for arg in "$@"; do
   esac
 done
 
+# --json подразумевает --quiet (чтобы не смешивать [+]-логи stderr с JSON stdout
+# при выводе в терминал через SSH, где потоки буферизуются отдельно)
+if [ "$OUTPUT_JSON" -eq 1 ]; then
+  QUIET=1
+fi
+
 # --- State (плоские переменные для совместимости с bash 3.2) ---
 STATE_OS_NAME="unknown"
 STATE_OS_VERSION="unknown"
@@ -83,7 +89,13 @@ WARNINGS_COUNT=0
 
 # --- Логирование (в stderr, чтобы stdout был чистым для --json) ---
 log() {
-  if [ "$QUIET" -eq 1 ] && [ "${1:-}" = "[+]" ]; then return 0; fi
+  # В --quiet/--json режиме подавляем info-логи (всё, кроме ошибок/предупреждений).
+  # Wildcard-pattern: "[+]*" ловит все строки начинающиеся с [+], и т.д.
+  if [ "$QUIET" -eq 1 ]; then
+    case "${1:-}" in
+      "[+]"*|"[✓]"*|"") return 0 ;;
+    esac
+  fi
   echo "$*" >&2
 }
 
