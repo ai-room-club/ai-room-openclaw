@@ -349,18 +349,23 @@ action_run_doctor() {
   local doctor_output
   doctor_output="$(capture_as_user 'openclaw doctor 2>&1')"
 
-  # Минимальный анализ: ищем явные маркеры
-  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -ciE '(critical|fatal|error:)' || true)
-  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -ciE '^warning|warn:' || true)
+  # Считаем строки формата "- CRITICAL: ..." и "- WARNING: ..." — стабильный
+  # формат маркеров в выводе `openclaw doctor`. Это точнее, чем grep по слову,
+  # потому что исключает ложные срабатывания на prose (например,
+  # "No critical issues found" не даёт ложного +1).
+  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*CRITICAL:' || true)
+  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*WARNING:' || true)
 
-  # Специальный случай: `state directory missing (~/.openclaw)` — это ожидаемо
-  # ДО первого `openclaw onboard` (он создаёт ~/.openclaw). В нашем pipeline
-  # onboarding делается позже, в configure-openclaw.sh — значит на этапе install
-  # эта запись НЕ является реальным критом. Не блокируем завершение скрипта.
-  local only_state_missing=0
-  if [ "$DOCTOR_CRITICAL" -eq 1 ] && echo "$doctor_output" | grep -q 'state directory missing'; then
-    only_state_missing=1
-  fi
+  # Все CRITICAL'ы вида "CRITICAL: ... missing ..." считаем ожидаемыми
+  # на этапе install ДО первого `openclaw onboard` / `doctor --fix`:
+  #   - "CRITICAL: state directory missing (~/.openclaw)"            — до создания home state
+  #   - "CRITICAL: Session store dir missing (~/.openclaw/agents/...)" — до первой сессии
+  #   - похожие про credentials/, agents/, etc.
+  # Эти директории создаются при onboard/doctor --fix, которые запускает
+  # configure-openclaw.sh (Script 4/5). Значит на этом этапе missing'и не блокер.
+  # Любой CRITICAL не про missing — всё ещё реальный блокер.
+  local missing_critical=0
+  missing_critical=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*CRITICAL:.*missing' || true)
 
   if [ "$DOCTOR_CRITICAL" -eq 0 ]; then
     if [ "$DOCTOR_WARNINGS" -gt 0 ]; then
@@ -368,9 +373,10 @@ action_run_doctor() {
     else
       log_ok "openclaw doctor: проблем не обнаружено"
     fi
-  elif [ "$only_state_missing" -eq 1 ]; then
-    log_info "openclaw doctor: 1 critical — 'state directory missing (~/.openclaw)'."
-    log_info "  Это ожидаемо до первого 'openclaw onboard'. Будет устранено в Script 4/5 (configure-openclaw.sh)."
+  elif [ "$DOCTOR_CRITICAL" -eq "$missing_critical" ]; then
+    log_info "openclaw doctor: $DOCTOR_CRITICAL critical(s), все про отсутствующие директории в ~/.openclaw."
+    log_info "  Это ожидаемо до первой настройки (создаются при onboard / doctor --fix)."
+    log_info "  Будет устранено в Script 4/5 (configure-openclaw.sh)."
     DOCTOR_CRITICAL=0
   else
     log_error "openclaw doctor нашёл $DOCTOR_CRITICAL critical issue(s). Вывод:"
