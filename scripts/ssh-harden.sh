@@ -10,7 +10,7 @@
 #   2. Кладёт публичный SSH-ключ пользователя в ~/.ssh/authorized_keys.
 #   3. Устанавливает fail2ban + ufw (если их нет).
 #   4. Настраивает UFW: deny incoming + allow 22,80,443 + enable.
-#   5. Пишет drop-in /etc/ssh/sshd_config.d/99-openclaw.conf с:
+#   5. Пишет drop-in /etc/ssh/sshd_config.d/01-openclaw.conf с:
 #        PasswordAuthentication no
 #        PermitRootLogin no
 #        PubkeyAuthentication yes
@@ -321,7 +321,17 @@ action_harden_ssh() {
   log_info "Настраиваю SSH-hardening..."
 
   local dropin_dir="/etc/ssh/sshd_config.d"
-  local dropin_file="$dropin_dir/99-openclaw.conf"
+  local dropin_file="$dropin_dir/01-openclaw.conf"
+  local legacy_dropin_file="$dropin_dir/99-openclaw.conf"
+
+  # Удаляем старый drop-in из предыдущих версий скрипта (когда файл назывался 99-*).
+  # Причина переименования: на Ubuntu 24+ в sshd_config.d/ обычно есть 50-cloud-init.conf
+  # с PasswordAuthentication yes. SSH обрабатывает drop-ins алфавитно; первая встреченная
+  # директива побеждает. 99-* проигрывал 50-cloud-init. 01-* побеждает первым.
+  if [ -f "$legacy_dropin_file" ]; then
+    safe_rm "$legacy_dropin_file"
+    log_ok "Удалён устаревший $legacy_dropin_file (из старой версии скрипта)"
+  fi
 
   # Проверим что main sshd_config включает sshd_config.d (Ubuntu 22+/Debian 12 — по умолчанию да)
   if [ -f /etc/ssh/sshd_config ] && ! grep -qE '^\s*Include\s+/etc/ssh/sshd_config\.d' /etc/ssh/sshd_config; then
@@ -365,14 +375,17 @@ EOF
   fi
   log_ok "sshd конфигурация прошла валидацию (sshd -t)"
 
-  # Рестартим sshd
-  # На Ubuntu 22 сервис называется 'ssh', на Debian — 'ssh' или 'sshd'
+  # Рестартим sshd.
+  # На Ubuntu 22/24 и современных Debian сервис называется 'ssh' (не 'sshd').
+  # ВАЖНО: используем restart, а не reload, потому что на Ubuntu 24+ включена
+  # socket activation (ssh.socket), и reload не всегда переключает новые соединения
+  # на обновлённый конфиг. restart перезапускает и socket, и service в unit-группе.
   local ssh_service="ssh"
   if ! systemctl list-unit-files "$ssh_service.service" >/dev/null 2>&1; then
     ssh_service="sshd"
   fi
-  run systemctl reload "$ssh_service" 2>/dev/null || run systemctl restart "$ssh_service"
-  log_ok "sshd перезапущен ($ssh_service)"
+  run systemctl restart "$ssh_service"
+  log_ok "sshd перезапущен ($ssh_service, включая socket если есть)"
 }
 
 # --- Итог ---
@@ -394,7 +407,7 @@ print_summary_human() {
       log "  ssh $USERNAME@<IP>"
       log ""
       log "Если это НЕ сработает — сразу запусти откат в этом же терминале:"
-      log "  ssh root@<IP> 'rm /etc/ssh/sshd_config.d/99-openclaw.conf && systemctl reload ssh'"
+      log "  ssh root@<IP> 'rm /etc/ssh/sshd_config.d/01-openclaw.conf && systemctl reload ssh'"
     fi
   elif [ "$ERRORS_COUNT" -eq 0 ]; then
     log "${prefix}ИТОГ: ${WARNINGS_COUNT} предупреждений."
