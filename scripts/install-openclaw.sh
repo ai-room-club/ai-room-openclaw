@@ -9,10 +9,15 @@
 # Что делает:
 #   1. Устанавливает Node.js <major> через nodesource (Ubuntu/Debian).
 #   2. Под указанным non-root пользователем (default: openclaw):
-#        curl -fsSL https://openclaw.ai/install.sh | bash
-#   3. Проверяет, что openclaw CLI доступен в PATH пользователя.
-#   4. Сверяет версию с минимальной (дефолт 2026.1.29 = патч CVE-2026-25253).
-#   5. Запускает `openclaw doctor` и анализирует вывод.
+#        curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+#      Флаг --no-onboard обязателен: иначе install.sh запускает интерактивный
+#      wizard, который падает на /dev/tty в неинтерактивном SSH-сессии.
+#      Onboarding проводится отдельно в configure-openclaw.sh.
+#   3. Гарантирует, что $HOME/.npm-global/bin в PATH пользователя
+#      (install.sh иногда только warn'ит вместо авто-добавления).
+#   4. Проверяет, что openclaw CLI доступен в PATH пользователя.
+#   5. Сверяет версию с минимальной (дефолт 2026.1.29 = патч CVE-2026-25253).
+#   6. Запускает `openclaw doctor` и анализирует вывод.
 #
 # Почему под non-root пользователем:
 #   install.sh кладёт бинарники в ~/.npm-global/bin и ~/.openclaw, и потом
@@ -233,26 +238,47 @@ action_install_openclaw() {
   fi
 
   log_info "Устанавливаю OpenClaw через официальный install.sh (под '$USERNAME')..."
+  log_info "  (--no-onboard: wizard требует TTY, в SSH его нет; onboarding — в configure-openclaw.sh)"
 
-  # Run install.sh от имени пользователя openclaw
-  # -i загружает его окружение; install.sh добавит PATH-записи в .bashrc для следующих логинов.
+  # Run install.sh от имени пользователя openclaw.
+  # --no-onboard: пропустить интерактивный setup (иначе /dev/tty: No such device).
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "      (dry-run, as $USERNAME) curl -fsSL https://openclaw.ai/install.sh | bash"
+    log "      (dry-run, as $USERNAME) curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard"
     INSTALLED_OPENCLAW_VERSION="(dry-run)"
     log_ok "OpenClaw установлен (dry-run)"
     return 0
   fi
 
-  run_as_user "curl -fsSL https://openclaw.ai/install.sh | bash" >/dev/null 2>&1 || {
-    log_error "install.sh от openclaw.ai завершился ошибкой. Попробуй: sudo -u $USERNAME -i bash, потом повторить curl вручную."
+  # stdout/stderr НЕ глушим — install.sh печатает понятный прогресс, пусть пользователь видит.
+  if ! run_as_user "curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard"; then
+    log_error "install.sh от openclaw.ai завершился ошибкой."
+    log_error "Попробуй вручную: sudo -u $USERNAME -i bash -lc 'curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard'"
     return 1
-  }
+  fi
 
-  # Проверка: openclaw доступен в PATH
+  # install.sh кладёт openclaw в ~/.npm-global/bin, но не всегда добавляет этот
+  # путь в PATH пользователя (warn'ит вместо этого). Правим руками — идемпотентно.
+  local user_home profile
+  user_home="$(getent passwd "$USERNAME" | cut -d: -f6)"
+  profile="${user_home}/.bashrc"
+
+  if [ -f "$profile" ] && ! grep -qF ".npm-global/bin" "$profile" 2>/dev/null; then
+    log_info "Добавляю \$HOME/.npm-global/bin в PATH ($profile)..."
+    {
+      echo ""
+      echo "# OpenClaw: npm global bin dir (added by install-openclaw.sh)"
+      echo 'export PATH="$HOME/.npm-global/bin:$PATH"'
+    } >> "$profile"
+    chown "$USERNAME:$USERNAME" "$profile"
+    log_ok "PATH обновлён в $profile"
+  fi
+
+  # Проверка: openclaw доступен в PATH пользователя (новый login shell подхватит .bashrc).
   INSTALLED_OPENCLAW_VERSION="$(capture_as_user 'openclaw --version 2>/dev/null' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 
   if [ -z "$INSTALLED_OPENCLAW_VERSION" ]; then
-    log_error "После install.sh команда 'openclaw' не найдена в PATH пользователя '$USERNAME'. Проверь ~/.bashrc / ~/.profile."
+    log_error "После install.sh команда 'openclaw' не найдена в PATH пользователя '$USERNAME'."
+    log_error "Проверь: sudo -u $USERNAME -i bash -lc 'command -v openclaw; echo \$PATH'"
     return 1
   fi
 
