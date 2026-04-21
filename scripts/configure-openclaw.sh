@@ -179,14 +179,17 @@ check_user_exists() {
 }
 
 check_openclaw_installed() {
+  # 2>&1 внутри bash -lc сливает stderr с stdout — нужно потому что
+  # `openclaw --version` может писать в stderr, а `capture_as_user`
+  # снаружи глушит stderr от sudo.
   local version
-  version="$(capture_as_user 'openclaw --version 2>/dev/null' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  version="$(capture_as_user 'openclaw --version 2>&1' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
   if [ -z "$version" ]; then
     log_error "openclaw не найден в PATH пользователя '$USERNAME'. Запусти install-openclaw.sh."
     return 1
   fi
 
-  OPENCLAW_BIN="$(capture_as_user 'command -v openclaw')"
+  OPENCLAW_BIN="$(capture_as_user 'command -v openclaw 2>&1' | head -1)"
   if [ -z "$OPENCLAW_BIN" ]; then
     log_error "command -v openclaw не вернул путь — странно, но есть версия. Проверь PATH."
     return 1
