@@ -349,12 +349,14 @@ action_run_doctor() {
   local doctor_output
   doctor_output="$(capture_as_user 'openclaw doctor 2>&1')"
 
-  # Считаем строки формата "- CRITICAL: ..." и "- WARNING: ..." — стабильный
-  # формат маркеров в выводе `openclaw doctor`. Это точнее, чем grep по слову,
-  # потому что исключает ложные срабатывания на prose (например,
-  # "No critical issues found" не даёт ложного +1).
-  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*CRITICAL:' || true)
-  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*WARNING:' || true)
+  # Считаем маркеры issue-строк в выводе `openclaw doctor`. Стабильный формат:
+  #   "│  - CRITICAL: ..." / "│  - WARNING: ..." внутри box-drawing-рамок.
+  # Anchor на начало строки НЕ используем — в начале строки рамочный символ
+  # U+2502 (│), а не пробел, и `[[:space:]]` его не покрывает. Вместо этого
+  # просто ищем стабильный подстроковый маркер "- CRITICAL:" / "- WARNING:" —
+  # он уникален для issue-bullet'ов и не встречается в обычной prose.
+  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -cE '- CRITICAL:' || true)
+  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -cE '- WARNING:' || true)
 
   # Все CRITICAL'ы вида "CRITICAL: ... missing ..." считаем ожидаемыми
   # на этапе install ДО первого `openclaw onboard` / `doctor --fix`:
@@ -365,7 +367,7 @@ action_run_doctor() {
   # configure-openclaw.sh (Script 4/5). Значит на этом этапе missing'и не блокер.
   # Любой CRITICAL не про missing — всё ещё реальный блокер.
   local missing_critical=0
-  missing_critical=$(echo "$doctor_output" | grep -cE '^[[:space:]]*-[[:space:]]*CRITICAL:.*missing' || true)
+  missing_critical=$(echo "$doctor_output" | grep -cE '- CRITICAL:.*missing' || true)
 
   if [ "$DOCTOR_CRITICAL" -eq 0 ]; then
     if [ "$DOCTOR_WARNINGS" -gt 0 ]; then
