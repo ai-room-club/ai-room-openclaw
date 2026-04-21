@@ -353,14 +353,29 @@ action_run_doctor() {
   DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -ciE '(critical|fatal|error:)' || true)
   DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -ciE '^warning|warn:' || true)
 
-  if [ "$DOCTOR_CRITICAL" -gt 0 ]; then
+  # Специальный случай: `state directory missing (~/.openclaw)` — это ожидаемо
+  # ДО первого `openclaw onboard` (он создаёт ~/.openclaw). В нашем pipeline
+  # onboarding делается позже, в configure-openclaw.sh — значит на этапе install
+  # эта запись НЕ является реальным критом. Не блокируем завершение скрипта.
+  local only_state_missing=0
+  if [ "$DOCTOR_CRITICAL" -eq 1 ] && echo "$doctor_output" | grep -q 'state directory missing'; then
+    only_state_missing=1
+  fi
+
+  if [ "$DOCTOR_CRITICAL" -eq 0 ]; then
+    if [ "$DOCTOR_WARNINGS" -gt 0 ]; then
+      log_warn "openclaw doctor: $DOCTOR_WARNINGS warning(s). Детали: openclaw doctor (под $USERNAME)."
+    else
+      log_ok "openclaw doctor: проблем не обнаружено"
+    fi
+  elif [ "$only_state_missing" -eq 1 ]; then
+    log_info "openclaw doctor: 1 critical — 'state directory missing (~/.openclaw)'."
+    log_info "  Это ожидаемо до первого 'openclaw onboard'. Будет устранено в Script 4/5 (configure-openclaw.sh)."
+    DOCTOR_CRITICAL=0
+  else
     log_error "openclaw doctor нашёл $DOCTOR_CRITICAL critical issue(s). Вывод:"
     log ""
     echo "$doctor_output" | while IFS= read -r line; do log "  $line"; done
-  elif [ "$DOCTOR_WARNINGS" -gt 0 ]; then
-    log_warn "openclaw doctor: $DOCTOR_WARNINGS warning(s). Рекомендуется просмотр."
-  else
-    log_ok "openclaw doctor: проблем не обнаружено"
   fi
 }
 
