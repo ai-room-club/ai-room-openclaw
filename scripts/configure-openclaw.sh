@@ -138,12 +138,11 @@ run_as_user() {
   sudo -u "$USERNAME" -i bash -lc "$cmd"
 }
 
+# Read-only wrapper. НЕ гейтится через DRY_RUN: это чтение, не модификация.
+# Dry-run нужны реальные значения (версия, путь к бинарю), чтобы напечатать
+# корректный план (например, ExecStart=<реальный путь> в systemd unit).
 capture_as_user() {
   local cmd="$1"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo ""
-    return 0
-  fi
   sudo -u "$USERNAME" -i bash -lc "$cmd" 2>/dev/null || true
 }
 
@@ -188,11 +187,10 @@ check_openclaw_installed() {
   fi
 
   OPENCLAW_BIN="$(capture_as_user 'command -v openclaw')"
-  if [ -z "$OPENCLAW_BIN" ] && [ "$DRY_RUN" -eq 0 ]; then
+  if [ -z "$OPENCLAW_BIN" ]; then
     log_error "command -v openclaw не вернул путь — странно, но есть версия. Проверь PATH."
     return 1
   fi
-  [ "$DRY_RUN" -eq 1 ] && OPENCLAW_BIN="/home/$USERNAME/.npm-global/bin/openclaw"
 
   log_ok "OpenClaw v${version} найден (${OPENCLAW_BIN})"
 }
