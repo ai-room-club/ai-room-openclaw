@@ -288,10 +288,12 @@ config_set() {
 action_config_gateway() {
   log_info "Прописываю gateway config..."
   config_set "gateway.mode" "$GATEWAY_MODE"
-  config_set "gateway.auth.enabled" "true"
+  # У gateway.auth НЕТ ключа .enabled — auth включается самим фактом наличия
+  # gateway.auth.token. Пустой token = auth off. См. config validation:
+  # "gateway.auth: Unrecognized key: enabled".
   config_set "gateway.auth.token" "$GATEWAY_TOKEN" mask
   config_set "gateway.port" "$GATEWAY_PORT"
-  log_ok "Gateway: mode=$GATEWAY_MODE, auth enabled, port=$GATEWAY_PORT"
+  log_ok "Gateway: mode=$GATEWAY_MODE, auth enabled (via token), port=$GATEWAY_PORT"
 }
 
 action_config_telegram() {
