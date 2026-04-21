@@ -197,13 +197,16 @@ action_create_user() {
     log_ok "Создан пользователь '$USERNAME' с домашней директорией /home/$USERNAME"
   fi
 
-  # Добавить в sudo (Debian/Ubuntu) — если не добавлен
-  if run getent group sudo >/dev/null 2>&1; then
-    if ! run id -nG "$USERNAME" 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
-      run usermod -aG sudo "$USERNAME"
-      log_ok "'$USERNAME' добавлен в группу sudo"
-    else
+  # Добавить в sudo (Debian/Ubuntu) — если не добавлен.
+  # getent/id — read-only команды, безопасно выполнять всегда (включая dry-run).
+  if getent group sudo >/dev/null 2>&1; then
+    if id -nG "$USERNAME" 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
       log_ok "'$USERNAME' уже в группе sudo"
+    else
+      run usermod -aG sudo "$USERNAME"
+      if [ "$DRY_RUN" -eq 0 ]; then
+        log_ok "'$USERNAME' добавлен в группу sudo"
+      fi
     fi
   fi
 
@@ -327,17 +330,19 @@ action_harden_ssh() {
 
   run mkdir -p "$dropin_dir"
 
+  # Явные значения yes/no вместо хитрых bash-parameter-expansion, чтобы
+  # не получить "yes0" при KEEP_*=0 (баг в предыдущей версии).
+  local pw_auth="no"
+  local root_ssh="no"
+  [ "$KEEP_PASSWORD_AUTH" -eq 1 ] && pw_auth="yes"
+  [ "$KEEP_ROOT_SSH" -eq 1 ] && root_ssh="yes"
+
   if [ "$DRY_RUN" -eq 1 ]; then
     log "      (dry-run) создать $dropin_file со следующим содержимым:"
-    log "        PasswordAuthentication ${KEEP_PASSWORD_AUTH:+yes}${KEEP_PASSWORD_AUTH:-no}"
-    log "        PermitRootLogin ${KEEP_ROOT_SSH:+yes}${KEEP_ROOT_SSH:-no}"
+    log "        PasswordAuthentication $pw_auth"
+    log "        PermitRootLogin $root_ssh"
     log "        PubkeyAuthentication yes"
   else
-    local pw_auth="no"
-    local root_ssh="no"
-    [ "$KEEP_PASSWORD_AUTH" -eq 1 ] && pw_auth="yes"
-    [ "$KEEP_ROOT_SSH" -eq 1 ] && root_ssh="yes"
-
     cat > "$dropin_file" <<EOF
 # Written by ssh-harden.sh v${SCRIPT_VERSION} — $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Do not edit by hand; re-run ssh-harden.sh to update.
@@ -347,8 +352,8 @@ PermitRootLogin $root_ssh
 PubkeyAuthentication yes
 EOF
     chmod 644 "$dropin_file"
+    log_ok "SSH-конфиг записан в $dropin_file"
   fi
-  log_ok "SSH-конфиг записан в $dropin_file"
 
   # Проверка синтаксиса до рестарта sshd — критично, чтобы не сломать доступ
   if [ "$DRY_RUN" -eq 0 ]; then
@@ -375,19 +380,27 @@ EOF
 print_summary_human() {
   log ""
   log "================================================"
+  local prefix=""
+  [ "$DRY_RUN" -eq 1 ] && prefix="[DRY-RUN] "
+
   if [ "$ERRORS_COUNT" -eq 0 ] && [ "$WARNINGS_COUNT" -eq 0 ]; then
-    log "ИТОГ: hardening завершён. ✓"
-    log ""
-    log "Теперь подключайся так:"
-    log "  ssh $USERNAME@<IP>"
-    log ""
-    log "Если это НЕ сработает — у тебя остаётся текущая SSH-сессия."
-    log "Из неё можно откатить изменения: rm /etc/ssh/sshd_config.d/99-openclaw.conf && systemctl reload ssh"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "${prefix}ИТОГ: все проверки прошли. Система НЕ менялась (dry-run)."
+      log "Чтобы применить изменения — запусти ту же команду без флага --dry-run."
+    else
+      log "ИТОГ: hardening завершён. ✓"
+      log ""
+      log "Теперь подключайся так:"
+      log "  ssh $USERNAME@<IP>"
+      log ""
+      log "Если это НЕ сработает — сразу запусти откат в этом же терминале:"
+      log "  ssh root@<IP> 'rm /etc/ssh/sshd_config.d/99-openclaw.conf && systemctl reload ssh'"
+    fi
   elif [ "$ERRORS_COUNT" -eq 0 ]; then
-    log "ИТОГ: hardening завершён с предупреждениями (${WARNINGS_COUNT})."
+    log "${prefix}ИТОГ: ${WARNINGS_COUNT} предупреждений."
     echo "$WARNINGS_LIST" | while IFS= read -r w; do [ -n "$w" ] && log "  ! $w"; done
   else
-    log "ИТОГ: hardening НЕ завершён. Критичных ошибок: ${ERRORS_COUNT}."
+    log "${prefix}ИТОГ: НЕ завершено. Критичных ошибок: ${ERRORS_COUNT}."
     echo "$ERRORS_LIST" | while IFS= read -r e; do [ -n "$e" ] && log "  ✗ $e"; done
   fi
   log "================================================"
