@@ -256,21 +256,49 @@ action_install_openclaw() {
     return 1
   fi
 
-  # install.sh кладёт openclaw в ~/.npm-global/bin, но не всегда добавляет этот
-  # путь в PATH пользователя (warn'ит вместо этого). Правим руками — идемпотентно.
-  local user_home profile
+  # install.sh кладёт openclaw в ~/.npm-global/bin, но не добавляет этот путь
+  # в PATH пользователя (только warn'ит). Правим руками — идемпотентно.
+  #
+  # ВАЖНО: пишем в .profile, а не в .bashrc. Ubuntu default .bashrc имеет
+  # early-return для non-interactive shell:
+  #   case $- in *i*) ;; *) return;; esac
+  # Это значит при `sudo -u openclaw -i bash -lc "cmd"` (non-interactive
+  # login shell — наш способ проверок) экспорты в конце .bashrc НЕ выполнятся.
+  # .profile же читается login-shell'ом безусловно, без early-return,
+  # и сам source'ит .bashrc — так что интерактивные SSH-сессии тоже получат PATH.
+  local user_home profile bashrc
   user_home="$(getent passwd "$USERNAME" | cut -d: -f6)"
-  profile="${user_home}/.bashrc"
+  profile="${user_home}/.profile"
+  bashrc="${user_home}/.bashrc"
 
-  if [ -f "$profile" ] && ! grep -qF ".npm-global/bin" "$profile" 2>/dev/null; then
-    log_info "Добавляю \$HOME/.npm-global/bin в PATH ($profile)..."
-    {
-      echo ""
-      echo "# OpenClaw: npm global bin dir (added by install-openclaw.sh)"
-      echo 'export PATH="$HOME/.npm-global/bin:$PATH"'
-    } >> "$profile"
-    chown "$USERNAME:$USERNAME" "$profile"
-    log_ok "PATH обновлён в $profile"
+  # Считаем PATH уже добавленным, если есть в .profile ИЛИ в .bashrc.
+  # (В .bashrc он мог остаться от прошлой версии этого скрипта — не переписываем,
+  # но и не добавляем дубль; для работы этого скрипта достаточно одного из двух.)
+  local path_in_profile=0 path_in_bashrc=0
+  [ -f "$profile" ] && grep -qF ".npm-global/bin" "$profile" 2>/dev/null && path_in_profile=1
+  [ -f "$bashrc" ]  && grep -qF ".npm-global/bin" "$bashrc"  2>/dev/null && path_in_bashrc=1
+
+  if [ "$path_in_profile" -eq 0 ]; then
+    if [ -f "$profile" ]; then
+      log_info "Добавляю \$HOME/.npm-global/bin в PATH ($profile)..."
+      {
+        echo ""
+        echo "# OpenClaw: npm global bin dir (added by install-openclaw.sh)"
+        echo 'export PATH="$HOME/.npm-global/bin:$PATH"'
+      } >> "$profile"
+      chown "$USERNAME:$USERNAME" "$profile"
+      log_ok "PATH обновлён в $profile"
+    else
+      log_warn "$profile не существует — PATH не добавлен. openclaw может быть не виден в login shell."
+    fi
+  else
+    log_ok "PATH уже содержит .npm-global/bin в $profile"
+  fi
+
+  if [ "$path_in_bashrc" -eq 1 ] && [ "$path_in_profile" -eq 0 ]; then
+    # Редкий случай: запись была только в .bashrc (от старой версии скрипта).
+    # Мы её оставляем, но информируем — .profile теперь главный источник.
+    log_info "Замечание: $bashrc уже содержит PATH-запись (от старой версии)."
   fi
 
   # Проверка: openclaw доступен в PATH пользователя (новый login shell подхватит .bashrc).
