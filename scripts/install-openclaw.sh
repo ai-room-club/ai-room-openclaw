@@ -355,8 +355,10 @@ action_run_doctor() {
   # U+2502 (│), а не пробел, и `[[:space:]]` его не покрывает. Вместо этого
   # просто ищем стабильный подстроковый маркер "- CRITICAL:" / "- WARNING:" —
   # он уникален для issue-bullet'ов и не встречается в обычной prose.
-  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -cE '- CRITICAL:' || true)
-  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -cE '- WARNING:' || true)
+  # `--` обязательно: pattern начинается с `-`, без разделителя grep принимает
+  # его за флаг и падает с "invalid option".
+  DOCTOR_CRITICAL=$(echo "$doctor_output" | grep -cE -- '- CRITICAL:' || true)
+  DOCTOR_WARNINGS=$(echo "$doctor_output" | grep -cE -- '- WARNING:' || true)
 
   # Все CRITICAL'ы вида "CRITICAL: ... missing ..." считаем ожидаемыми
   # на этапе install ДО первого `openclaw onboard` / `doctor --fix`:
@@ -367,7 +369,7 @@ action_run_doctor() {
   # configure-openclaw.sh (Script 4/5). Значит на этом этапе missing'и не блокер.
   # Любой CRITICAL не про missing — всё ещё реальный блокер.
   local missing_critical=0
-  missing_critical=$(echo "$doctor_output" | grep -cE '- CRITICAL:.*missing' || true)
+  missing_critical=$(echo "$doctor_output" | grep -cE -- '- CRITICAL:.*missing' || true)
 
   if [ "$DOCTOR_CRITICAL" -eq 0 ]; then
     if [ "$DOCTOR_WARNINGS" -gt 0 ]; then
